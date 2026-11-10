@@ -4,7 +4,7 @@ using UnityEngine;
 [RequireComponent(typeof(Camera))]
 public class ChaseCamera : MonoBehaviour
 {
-    public Rigidbody target;
+    public Skier target;
     public float distance = 5f, height = 1.6f, lookHeight = 0.6f;
     public float turnSmooth = 4f;         // how fast the camera swings behind the travel direction
     public float baseFov = 60f, fastFov = 80f, fastSpeed = 30f;
@@ -16,7 +16,7 @@ public class ChaseCamera : MonoBehaviour
 
     void LateUpdate()
     {
-        Vector3 v = target.linearVelocity;
+        Vector3 v = target.Travel;
         if (v.sqrMagnitude > 1f) dir = Vector3.Slerp(dir, v.normalized, 1f - Mathf.Exp(-turnSmooth * Time.deltaTime));
         Vector3 p = target.transform.position;
         transform.position = p - dir * distance + Vector3.up * height;

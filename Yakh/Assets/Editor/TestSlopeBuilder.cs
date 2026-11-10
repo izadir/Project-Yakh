@@ -8,7 +8,16 @@ static class TestSlopeBuilder
 {
     const string ScenePath = "Assets/Scenes/TestSlope.unity";
     const float Width = 30f, Thickness = 2f, PoleSpacing = 10f, SpawnAt = 16f;
-    const int RailSegment = 2; // the main slope gets a down rail, right of the jump line
+    // Grind features: profile segment (straight ones only), start distance into it, side offset,
+    // length, width, and top height above the snow (m). A width over 0.2 m makes a box, not a rail.
+    static readonly (int seg, float at, float x, float len, float width, float height)[] Grinds =
+    {
+        (2, 12f, 5f, 30f, 0.08f, 0.45f),   // down rail, main slope, right
+        (2, 10f, -6f, 30f, 0.5f, 0.3f),    // down box, main slope, left
+        (9, 6f, 5f, 28f, 0.08f, 0.5f),     // rail on the runout, right
+        (9, 6f, -5f, 28f, 0.5f, 0.3f),     // box on the runout, left
+        (11, 8f, 0f, 25f, 0.08f, 0.5f),    // flat rail on the flat end
+    };
 
     // The hill from top to bottom: length (m), start and end angle (deg, positive is downhill), feature color.
     // A start angle that differs from the previous end angle makes a sharp edge, as at the lip.
@@ -60,17 +69,22 @@ static class TestSlopeBuilder
                         Part(slope, PrimitiveType.Cube, at + Vector3.right * (x * (Width / 2f + 0.5f)), Quaternion.identity, new Vector3(0.15f, 2f, 0.15f), pole);
                 }
                 if (dist + len >= SpawnAt) spawn ??= p + fwd * (SpawnAt - dist) + up * 0.45f;
-                if (si == RailSegment && i == 0)
-                {
-                    // A trigger, so the skier never collides with it. Skier.cs locks on instead. The posts have no collider.
-                    Vector3 c = p + fwd * 27f + up * 0.4f + Vector3.right * 5f;
-                    var bar = Part(slope, PrimitiveType.Cube, c, rot, new Vector3(0.08f, 0.08f, 30f), steel);
-                    bar.name = "Rail";
-                    bar.GetComponent<Collider>().isTrigger = true;
-                    bar.AddComponent<Rail>();
-                    foreach (float z in new[] { -14.5f, 0f, 14.5f })
-                        Part(slope, PrimitiveType.Cube, c + fwd * z - up * 0.2f, rot, new Vector3(0.05f, 0.4f, 0.05f), steel, false);
-                }
+                if (i == 0)
+                    foreach (var g in Grinds)
+                    {
+                        if (g.seg != si) continue;
+                        // A trigger, so the skier never collides with it. Skier.cs locks on instead. Posts have no collider.
+                        bool box = g.width > 0.2f;
+                        float h = box ? g.height : 0.08f;
+                        Vector3 c = p + fwd * (g.at + g.len / 2f) + up * (g.height - h / 2f) + Vector3.right * g.x;
+                        var bar = Part(slope, PrimitiveType.Cube, c, rot, new Vector3(g.width, h, g.len), box ? feature : steel);
+                        bar.name = box ? "Box" : "Rail";
+                        bar.GetComponent<Collider>().isTrigger = true;
+                        bar.AddComponent<Rail>();
+                        if (!box)
+                            for (float z = -g.len / 2f + 0.5f; z < g.len / 2f; z += 7f)
+                                Part(slope, PrimitiveType.Cube, c + fwd * z - up * (g.height / 2f), rot, new Vector3(0.05f, g.height, 0.05f), steel, false);
+                    }
                 p = q;
                 dist += len;
             }
@@ -98,7 +112,7 @@ static class TestSlopeBuilder
 
         var cam = Camera.main;
         cam.transform.position = spawn.Value + new Vector3(0f, 1.6f, -5f);
-        cam.gameObject.AddComponent<ChaseCamera>().target = skierGo.GetComponent<Rigidbody>();
+        cam.gameObject.AddComponent<ChaseCamera>().target = skier;
         EditorSceneManager.SaveScene(scene, ScenePath);
     }
 
