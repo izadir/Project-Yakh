@@ -18,7 +18,7 @@ public class ChaseCamera : MonoBehaviour
     {
         Vector3 v = target.Travel;
         if (v.sqrMagnitude > 1f) dir = Vector3.Slerp(dir, v.normalized, 1f - Mathf.Exp(-turnSmooth * Time.deltaTime));
-        Vector3 p = target.transform.position;
+        Vector3 p = target.Focus;
         transform.position = p - dir * distance + Vector3.up * height;
         transform.LookAt(p + Vector3.up * lookHeight);
         cam.fieldOfView = Mathf.Lerp(baseFov, fastFov, v.magnitude / fastSpeed);

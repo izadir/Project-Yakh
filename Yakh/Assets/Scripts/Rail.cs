@@ -4,6 +4,7 @@ using UnityEngine;
 // ponytail: straight rails only, curved rails can move to the Splines package.
 public class Rail : MonoBehaviour
 {
+    public Rail next;   // a kink: the segment that carries on from this end
     public Vector3 Dir => transform.forward;
 
     // Closest point on the top line, and where it sits along the rail (0 is the start, 1 is the end, not clamped).

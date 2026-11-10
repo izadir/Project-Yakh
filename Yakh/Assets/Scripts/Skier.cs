@@ -57,18 +57,32 @@ public class Skier : MonoBehaviour
     public float railSwing = 60f;         // deg the skis swing off the rail line at full balance
     public float slipSpeed = 2f;          // sideways speed when the skier slips off
 
-    public Transform body;                // squashes to show crouch and tuck
+    [Header("Bail")]
+    public float getUpTime = 2.5f;        // s in the ragdoll before the skier gets up where it lies
+    public float ragdollFriction = 0.35f; // low, so a crash slides on the snow
+    public float tripSpeed = 4f;          // hitting the side of a rail or box faster than this (m/s into it) bails
+
+    [Header("Dev")]
+    public float boostSpeed = 5f;         // LB adds this much speed. ponytail: dev only, remove before release.
+
+    public Transform body;                // squashes to show crouch and tuck. Its Rigidbody children are the ragdoll.
+    public Rigidbody pelvis;              // the ragdoll root, the camera follows it in a bail
 
     // What the camera follows: the rail line on a rail, so the snap correction never shakes it.
-    public Vector3 Travel => rail ? rail.Dir * (railSign * railSpeed) : rb.linearVelocity;
+    public Vector3 Travel => bailed ? pelvis.linearVelocity : rail ? rail.Dir * (railSign * railSpeed) : rb.linearVelocity;
+    public Vector3 Focus => bailed ? pelvis.transform.position : transform.position;
 
     Rigidbody rb;
+    Rigidbody[] parts;
+    Pose[] rest;
+    Gear[] gear;
     Rail rail, lastRail;
     readonly Collider[] near = new Collider[8];
+    int railMask, groundMask;
     float radius, airTime, balance, railSpeed, railSign, railCooldown, lastGroundedTime = -1f, lastDownTime = -1f;
-    float lastSteer = 1f, hockeySide, railSide, spinVel, flipVel, spinInit, flipInit;
-    bool grounded, wasHockey, recovering, popQueued, respawnQueued;
-    Vector3 heading, groundUp = Vector3.up, spawnPos;
+    float lastSteer = 1f, hockeySide, railSide, spinVel, flipVel, spinInit, flipInit, getUpAt;
+    bool grounded, wasHockey, recovering, popQueued, respawnQueued, boostQueued, bailed;
+    Vector3 heading, groundUp = Vector3.up, spawnPos, lastV;   // lastV: the velocity before the physics step, for a trip
     Quaternion spawnRot;
 
     void Awake()
@@ -90,6 +104,16 @@ public class Skier : MonoBehaviour
         spawnRot = transform.rotation;
         heading = transform.forward;
         Application.targetFrameRate = 60;
+
+        Physics.gravity = Vector3.down * gravity;   // the ragdoll falls like the skier
+        railMask = LayerMask.GetMask("Rail");
+        groundMask = Physics.DefaultRaycastLayers & ~railMask;   // rails are solid, but they are never ground
+        gear = body.GetComponentsInChildren<Gear>();
+        parts = body.GetComponentsInChildren<Rigidbody>();
+        rest = System.Array.ConvertAll(parts, p => new Pose(p.transform.localPosition, p.transform.localRotation));
+        var snow = new PhysicsMaterial { dynamicFriction = ragdollFriction, staticFriction = ragdollFriction };
+        foreach (var c in body.GetComponentsInChildren<Collider>()) c.sharedMaterial = snow;
+        SetRagdoll(false);
     }
 
     // Buttons and the flick are read every frame, then used in FixedUpdate.
@@ -101,17 +125,25 @@ public class Skier : MonoBehaviour
         if (y < -0.6f) lastDownTime = Time.time;
         else if (y > 0.6f && Time.time - lastDownTime < flickWindow) { popQueued = true; lastDownTime = -1f; }
         if (pad.selectButton.wasPressedThisFrame) respawnQueued = true;
-        if (body) body.localScale = new Vector3(1f, y < -0.6f ? 0.7f : pad.buttonSouth.isPressed ? 0.85f : 1f, 1f);
+        if (pad.leftShoulder.wasPressedThisFrame) boostQueued = true;
+        if (!bailed) body.localScale = new Vector3(1f, y < -0.6f ? 0.7f : pad.buttonSouth.isPressed ? 0.85f : 1f, 1f);
     }
 
     void FixedUpdate()
     {
         if (respawnQueued || rb.position.y < spawnPos.y - 200f) { Respawn(); return; }
+        Spray(0f, Vector3.up);
+        if (bailed) { if (Time.time > getUpAt) GetUp(); return; }
         var pad = Gamepad.current;
         Vector2 stick = pad != null ? pad.leftStick.ReadValue() : Vector2.zero;
         bool tuck = pad != null && pad.buttonSouth.isPressed;
         float dt = Time.fixedDeltaTime;
-        Spray(0f, Vector3.up);
+        if (boostQueued)
+        {
+            boostQueued = false;
+            if (rail) railSpeed += boostSpeed;
+            else rb.linearVelocity += (rb.linearVelocity.sqrMagnitude > 1f ? rb.linearVelocity.normalized : heading) * boostSpeed;
+        }
         if (rail) { RideRail(stick, dt); return; }
         Vector3 v = rb.linearVelocity;
 
@@ -119,9 +151,9 @@ public class Skier : MonoBehaviour
         bool wasGrounded = grounded;
         Vector3 down = grounded ? -groundUp : Vector3.down;
         grounded = Physics.SphereCast(rb.position, radius * 0.9f, down, out RaycastHit hit,
-                       radius * 0.1f + snapDistance, Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)
+                       radius * 0.1f + snapDistance, groundMask, QueryTriggerInteraction.Ignore)
                    && Vector3.Dot(v, hit.normal) < snapMaxSpeed;
-        if (grounded && !wasGrounded && airTime > 0.2f && !Land(hit.normal, v)) { Bail(); return; }
+        if (grounded && !wasGrounded && airTime > 0.2f && !Land(hit.normal, v)) { Bail(v); return; }
         airTime = grounded ? 0f : airTime + dt;
 
         if (grounded)
@@ -241,7 +273,7 @@ public class Skier : MonoBehaviour
 
         v += Vector3.down * (gravity * dt);
         v -= v * (v.magnitude * (tuck ? tuckDrag : drag) * dt);
-        rb.linearVelocity = v;
+        rb.linearVelocity = lastV = v;
 
         if (grounded)
         {
@@ -274,7 +306,7 @@ public class Skier : MonoBehaviour
         {
             Vector3 q = rb.position + v * t + Vector3.down * (0.5f * gravity * t * t), seg = q - p;
             if (Physics.SphereCast(p, radius + snapDistance, seg.normalized, out RaycastHit hit, seg.magnitude,
-                    Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore))
+                    groundMask, QueryTriggerInteraction.Ignore))
             {
                 normal = hit.normal;
                 return t - step + step * hit.distance / seg.magnitude;
@@ -305,7 +337,7 @@ public class Skier : MonoBehaviour
     void TryLockRail(Vector3 v)
     {
         Vector3 feet = rb.position - Vector3.up * radius;
-        int count = Physics.OverlapSphereNonAlloc(feet, railReach + railAbove, near, Physics.AllLayers, QueryTriggerInteraction.Collide);
+        int count = Physics.OverlapSphereNonAlloc(feet, railReach + railAbove, near, railMask);
         for (int i = 0; i < count; i++)
         {
             if (!near[i].TryGetComponent(out Rail r) || (r == lastRail && Time.time < railCooldown)) continue;
@@ -328,14 +360,18 @@ public class Skier : MonoBehaviour
             float yaw = Vector3.SignedAngle(dir, Vector3.ProjectOnPlane(rb.rotation * Vector3.forward, up), up);
             railSide = Mathf.Abs(yaw) > 15f && Mathf.Abs(yaw) < 165f ? Mathf.Sign(yaw) : lastSteer;
             grounded = false;
+            rb.detectCollisions = false;   // the rail is solid. While locked, RideRail holds the skier on its top line.
             return;
         }
     }
 
     void RideRail(Vector2 stick, float dt)
     {
+        // A kink: past the end of a segment the skier carries on along the next one with its speed.
+        // ponytail: forward only, a kinked rail ridden backward lets go at the joint. Add Rail.prev if that matters.
+        Vector3 top = rail.Closest(rb.position, out float t);
+        if (t >= 1f && railSign > 0f && rail.next) top = (rail = rail.next).Closest(rb.position, out t);
         Vector3 up = rail.transform.up, dir = rail.Dir * railSign, side = Vector3.Cross(up, dir);
-        Vector3 top = rail.Closest(rb.position - up * radius, out float t);
         railSpeed += (Vector3.Dot(Vector3.down, dir) * gravity - railFriction) * dt;
 
         // Inside the lock zone the rail pulls the skis back to center. Outside it the balance falls away.
@@ -361,11 +397,13 @@ public class Skier : MonoBehaviour
     void LeaveRail(Vector3 push, bool popped)
     {
         rb.linearVelocity = rail.Dir * (railSign * railSpeed) + push;
+        rb.detectCollisions = true;
         lastRail = rail;
         rail = null;
         railCooldown = Time.time + 0.4f;               // only this rail, so the next rail can lock at once
         lastGroundedTime = popped ? -1f : Time.time;   // a late pop still works just after the rail end
-        airTime = popped ? 0f : -1f;                   // only a pop out gets the landing check, a slip or the end never bails
+        // A pop or a rising exit (a kicker) gets the landing check. A slip or a flat end never bails.
+        airTime = popped || rb.linearVelocity.y > 1f ? 0f : -1f;
         balance = 0f;
     }
 
@@ -377,22 +415,80 @@ public class Skier : MonoBehaviour
         if (amount > 0f) spray.transform.rotation = Quaternion.LookRotation(dir);
     }
 
-    // ponytail: a bail returns to the start. The ragdoll replaces this in step 3.
-    void Bail() => Respawn();
+    // The ragdoll takes over. Each part starts with the skier's velocity and air spin.
+    // The skier sphere stays at the crash point with no collision until GetUp.
+    void Bail(Vector3 v)
+    {
+        bailed = true;
+        getUpAt = Time.time + getUpTime;
+        Vector3 w = rb.rotation * new Vector3(flipVel, spinVel, 0f) * Mathf.Deg2Rad;
+        rb.linearVelocity = Vector3.zero;
+        rb.detectCollisions = false;
+        body.localScale = Vector3.one;
+        SetRagdoll(true);
+        foreach (var p in parts)
+        {
+            p.linearVelocity = v + Vector3.Cross(w, p.transform.position - rb.position);
+            p.angularVelocity = w;
+        }
+    }
+
+    // Trip: a fast hit into the side of a rail or box bails, with the speed from before the hit.
+    // A hit on its top only bumps the skier up.
+    void OnCollisionEnter(Collision c)
+    {
+        if (bailed || (railMask & (1 << c.gameObject.layer)) == 0) return;
+        Vector3 n = c.GetContact(0).normal;
+        if (Vector3.Dot(n, c.transform.up) < 0.5f && Vector3.Dot(lastV, -n) > tripSpeed) Bail(lastV);
+    }
+
+    // The skier gets up where the ragdoll lies, keeps its speed along the slope, and faces the way it slides
+    // (down the fall line when it is still). Rails count here, so a ragdoll on a box puts the skier on top of it.
+    void GetUp()
+    {
+        if (!Physics.Raycast(pelvis.position + Vector3.up, Vector3.down, out RaycastHit hit, 4f,
+                Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore)) { Respawn(); return; }
+        Vector3 v = Vector3.ProjectOnPlane(pelvis.linearVelocity, hit.normal);
+        Vector3 f = v.sqrMagnitude > 1f ? v : Vector3.ProjectOnPlane(Vector3.down, hit.normal);
+        if (f.sqrMagnitude < 0.01f) f = Vector3.ProjectOnPlane(rb.rotation * Vector3.forward, hit.normal);
+        Place(hit.point + hit.normal * radius, Quaternion.LookRotation(f, hit.normal), v);
+    }
 
     // ponytail: returns to the start point only, the step 2 marker replaces spawnPos.
-    void Respawn()
+    void Respawn() => Place(spawnPos, spawnRot, Vector3.zero);
+
+    void Place(Vector3 pos, Quaternion rot, Vector3 v)
     {
-        respawnQueued = false;
+        if (bailed)
+        {
+            bailed = false;
+            SetRagdoll(false);
+            for (int i = 0; i < parts.Length; i++) parts[i].transform.SetLocalPositionAndRotation(rest[i].position, rest[i].rotation);
+            foreach (var g in gear) g.Attach();
+        }
+        rb.detectCollisions = true;
+        respawnQueued = popQueued = boostQueued = false;
         rail = null;
         grounded = recovering = false;
         balance = airTime = spinVel = flipVel = spinInit = flipInit = 0f;
-        rb.linearVelocity = Vector3.zero;
-        rb.position = spawnPos;
-        rb.rotation = spawnRot;
-        transform.SetPositionAndRotation(spawnPos, spawnRot);
-        heading = spawnRot * Vector3.forward;
-        groundUp = Vector3.up;
+        rb.linearVelocity = v;
+        rb.position = pos;
+        rb.rotation = rot;
+        transform.SetPositionAndRotation(pos, rot);
+        heading = rot * Vector3.forward;
+        groundUp = rot * Vector3.up;
+    }
+
+    // While skiing the parts are kinematic and ride along with no collision. Interpolation is off then,
+    // or it would fight the parent transform.
+    void SetRagdoll(bool on)
+    {
+        foreach (var p in parts)
+        {
+            p.isKinematic = !on;
+            p.detectCollisions = on;
+            p.interpolation = on ? RigidbodyInterpolation.Interpolate : RigidbodyInterpolation.None;
+        }
     }
 
     void OnGUI()
