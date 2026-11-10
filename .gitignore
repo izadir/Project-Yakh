@@ -1,0 +1,29 @@
+# The Unity project is in Yakh/
+Yakh/[Ll]ibrary/
+Yakh/[Tt]emp/
+Yakh/[Oo]bj/
+Yakh/[Bb]uild/
+Yakh/[Bb]uilds/
+Yakh/[Ll]ogs/
+Yakh/[Uu]ser[Ss]ettings/
+Yakh/[Mm]emoryCaptures/
+Yakh/[Rr]ecordings/
+Yakh/.utmp/
+
+# Unity makes these for the IDE
+*.csproj
+*.sln
+*.slnx
+*.user
+*.userprefs
+*.pidb
+.vs/
+
+# Build output
+*.app
+*.ipa
+*.unitypackage
+
+AGENT.md
+
+.DS_Store
