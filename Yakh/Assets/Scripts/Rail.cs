@@ -6,6 +6,7 @@ public class Rail : MonoBehaviour
 {
     public Rail next;   // a kink: the segment that carries on from this end
     public Vector3 Dir => transform.forward;
+    public bool Metal => transform.lossyScale.x <= 0.2f;   // a steel rail. A box is wider (the same split as Shapes.Grind).
 
     // Closest point on the top line, and where it sits along the rail (0 is the start, 1 is the end, not clamped).
     public Vector3 Closest(Vector3 p, out float t)
