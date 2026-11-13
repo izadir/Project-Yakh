@@ -25,7 +25,7 @@ public static class Shapes
             // Kicker: a short segment kinks up off the end, so the skier leaves the rail rising.
             var kr = rot * Quaternion.Euler(-kink, 0f, 0f);
             Vector3 end = c + fwd * (len / 2f), tip = end + kr * Vector3.forward * KinkLen;
-            bar.next = Bar(parent, bar.name, (end + tip) / 2f, kr, new Vector3(width, h, KinkLen), steel);
+            (bar.next = Bar(parent, bar.name, (end + tip) / 2f, kr, new Vector3(width, h, KinkLen), steel)).prev = bar;
             float rise = Vector3.Dot(tip - p, up);
             Part(parent, PrimitiveType.Cube, tip - up * (rise / 2f), rot, new Vector3(0.05f, rise, 0.05f), steel, false);
         }

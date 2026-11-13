@@ -7,18 +7,19 @@ using static Shapes;
 // (Yakh > Build Mountain makes the scene). The design is fixed, so it is the same every time.
 // The snow is a height field: a fall line profile that gets steeper all the way down, natural bumps, and walls at the
 // sides. Runs are paths carved into it, in order. Each one flattens a corridor, and its height offset along the path
-// raises a spine (a ridge with a flat top) or cuts a canyon (a U gully). A branch splits from another run and never
-// undoes it. Cat tracks are flat roads across the mountain. Canyons and cat tracks are gaps: where Main Street or a
-// ridge meets one, a kicker sends the skier over it. Where the Tube passes under Highline, a tunnel roof carries the
-// ridge over it. Park features sit on the runs, and trees cover the rest as forest and glades. Trees and the steep walls
-// of park features and tunnel portals are on the Obstacle layer.
+// raises a spine (a ridge with a flat top) or cuts a canyon (a U gully, or a round one). A branch splits from another
+// run and never undoes it. Moguls and rollers are bumps in lanes of a run. Cat tracks are flat roads across the
+// mountain. Canyons and cat tracks are gaps: where Main Street or a ridge meets one, a kicker sends the skier over it.
+// Where the Tube passes under Highline, it goes through a pipe and the ridge carries on over it. Park features and rails
+// sit on the runs, and trees cover the rest as forest and glades. Trees, the steep walls of park features, and the
+// outside of the pipes are on the Obstacle layer.
 public class Mountain : MonoBehaviour
 {
     public Material snow, feature, steel, bark, pine;
 
-    const float Cell = 4f, Edge = 245f, Walls = 205f, Band = 20f, Arch = 6f;
+    const float Cell = 4f, Edge = 245f, Walls = 205f, Band = 20f;
     const int Sub = 4;   // a fine quad is Cell / Sub = 1 m
-    static readonly float Sin75 = Mathf.Sin(75f * Mathf.Deg2Rad);
+    static readonly float Sin75 = Mathf.Sin(75f * Mathf.Deg2Rad), Sin60 = Mathf.Sin(60f * Mathf.Deg2Rad);
 
     // Fall line from the summit: length (m), start and end angle (deg, positive is downhill). It gets steeper all the way
     // down. Hands off (simulated): the park holds 21 to 23 m/s (its jumps are sized for that), the upper mountain
@@ -52,7 +53,13 @@ public class Mountain : MonoBehaviour
     // a spine, down is a canyon, a negative distance counts from the end), and the path (x, z) through the mountain.
     static readonly (float, float)[] Flat = new (float, float)[0];
     static readonly Run Main = new("Main Street", 40f, 20f, false, Flat,   // straight through the park, then a slight wiggle
-        new(0, 30), new(0, 200), new(0, 600), new(12, 850), new(-10, 1100), new(8, 1400), new(-8, 1700), new(10, 2000), new(0, 2300), new(0, 2750));
+        new(0, 30), new(0, 200), new(0, 600), new(12, 850), new(-10, 1100), new(8, 1400), new(-8, 1700), new(10, 2000), new(0, 2300), new(0, 2750))
+    {
+        // The straights keep a lane down the middle for speed: rollers to pop off, and pillows (big rollers) on the face.
+        // The lane on the left has moguls in places. See Features for the rest of the side lanes.
+        bumps = new[] { Rollers(60, 180, 0.6f, 40), Rollers(520, 640, 0.8f, 40), Rollers(1450, 1610, 1f, 40), Moguls(1520, 1740, -38, -18),
+                        Rollers(1850, 1970, 1.2f, 40), Moguls(1850, 1990, -38, -18), Rollers(2060, 2240, 1.8f, 60) },
+    };
     static readonly Run Highline = new("Highline", 8f, 26f, false, new[] { (60f, 0f), (220f, 14f), (-260f, 14f), (-257f, 0f) },   // splits off Main, a 14 m cliff onto the face
         new(-20, 620), new(-70, 720), new(-115, 840), new(-140, 1000), new(-148, 1200), new(-135, 1400), new(-148, 1600),
         new(-140, 1800), new(-115, 2000), new(-90, 2150), new(-60, 2280), new(-25, 2420));   // merges back into Main
@@ -63,9 +70,27 @@ public class Mountain : MonoBehaviour
         new(158, 1620), new(135, 1750), new(112, 1900), new(110, 2060), new(95, 2160), new(70, 2300), new(45, 2440)) { branch = true };   // merges into Main
     static readonly Run WishR = new("Wishbone right", 8f, 26f, false, Fork,
         new(158, 1620), new(180, 1750), new(182, 1900), new(175, 2060), new(160, 2160), new(135, 2300), new(95, 2420), new(60, 2500)) { branch = true };
-    static readonly Run Tube = new("Tube", 6f, 6f, false, Flat,   // splits off Main, twice through Highline in a tunnel, back into Main
+    // Splits off Main, twice through Highline in a pipe, back into Main. A round gully: the bottom of a 7 m pipe
+    // (half = 7 sin 60°, 3.5 m deep), so it runs straight into the pipes.
+    static readonly Run Tube = new("Tube", 7f * 0.866f, 6f, false, new[] { (0f, 0f), (50f, -3.5f), (-50f, -3.5f), (-1f, 0f) },
         new(-25, 1470), new(-75, 1515), new(-150, 1570), new(-192, 1630), new(-198, 1760), new(-190, 1880), new(-135, 1960),
-        new(-80, 2010), new(-30, 2060));
+        new(-80, 2010), new(-30, 2060)) { round = true };
+    // Mogul runs. Bumps splits off the summit to the left and comes back into Main below the park. Zipper splits off
+    // the foot of Highline, down the face to the left, and into the runout.
+    static readonly Run Bumps = new("Bumps", 10f, 14f, false, Flat,
+        new(-40, 50), new(-95, 110), new(-150, 200), new(-160, 300), new(-130, 400), new(-120, 490), new(-80, 570), new(-45, 630))
+    { bumps = new[] { Moguls(40, 220, -10, 10), Moguls(310, 480, -10, 10) } };
+    static readonly Run Zipper = new("Zipper", 10f, 14f, false, Flat,
+        new(-75, 2250), new(-120, 2330), new(-160, 2430), new(-150, 2540), new(-100, 2630), new(-45, 2690))
+    { bumps = new[] { Moguls(60, 280, -10, 10) } };
+    // Tight valleys. Each joins the canyon going its way, and its floor drops to the canyon's 12 m over the last 70 m.
+    static readonly Run Ravine = new("Ravine", 9f, 6f, false, new[] { (0f, 0f), (50f, -9f), (-80f, -9f), (-10f, -12f) },   // off the summit to the right
+        new(40, 50), new(95, 110), new(150, 190), new(125, 290), new(165, 380), new(125, 470), new(90, 560), new(95, 665)) { branch = true };
+    static readonly Run Slot = new("Slot", 7f, 6f, false, new[] { (0f, 0f), (40f, -7f), (-80f, -7f), (-10f, -12f) },   // between Main and Highline
+        new(-40, 770), new(-72, 850), new(-85, 950), new(-84, 1050), new(-82, 1130), new(-86, 1190), new(-88, 1240)) { branch = true };
+    // Off the foot of Wishbone right, down the face along the right wall, and up out onto the runout.
+    static readonly Run Chute = new("Chute", 7f, 6f, false, new[] { (0f, 0f), (40f, -8f), (-60f, -8f), (-1f, 0f) },
+        new(150, 2230), new(185, 2320), new(185, 2430), new(160, 2530), new(110, 2620), new(55, 2690)) { branch = true };
     static readonly Run TrackA = new("Cat track A", 6f, 8f, true, Flat, new(-205, 700), new(205, 740));
     static readonly Run TrackB = new("Cat track B", 6f, 8f, true, Flat, new(205, 1240), new(-205, 1280));
     static readonly Run TrackC = new("Cat track C", 6f, 8f, true, Flat, new(-205, 1790), new(205, 1830));
@@ -74,7 +99,37 @@ public class Mountain : MonoBehaviour
         new(20, 1410), new(65, 1490), new(60, 1570), new(35, 1650));   // the exit rises onto Main Street
     static readonly Run CanyonArm = new("Canyon arm", 13f, 8f, true, new[] { (0f, -12f) },   // splits around an island and rejoins
         new(120, 720), new(170, 780), new(180, 860), new(150, 920), new(108, 950)) { branch = true };
-    static readonly Run[] Runs = { Main, Highline, Wishbone, WishL, WishR, Tube, TrackA, TrackB, TrackC, Canyon, CanyonArm };
+    // The valleys come after the canyon and are branches, so they drop into it.
+    static readonly Run[] Runs = { Main, Highline, Wishbone, WishL, WishR, Tube, Bumps, Zipper, TrackA, TrackB, TrackC, Canyon, CanyonArm, Ravine, Slot, Chute };
+
+    // Moguls: a checkerboard of bumps and dips 10 m apart, 1 m from top to bottom, from s0 to s1 along a run and x0 to x1
+    // to its side. Rollers: waves across the middle lane, len long.
+    static (float, float, float, float, float, float, bool) Moguls(float s0, float s1, float x0, float x1) => (s0, s1, x0, x1, 0.5f, 10f, true);
+    static (float, float, float, float, float, float, bool) Rollers(float s0, float s1, float amp, float len) => (s0, s1, -14f, 14f, amp, len, false);
+
+    // Side hits: run, distance along it, side offset, width. A short kicker that throws the skier onto the snow below,
+    // so it works at any speed. Each has room to land before the next feature.
+    static readonly (Run r, float s, float x, float w)[] Hits =
+    {
+        (Main, 1890, 26, 12), (Main, 2030, 26, 12), (Main, 2130, 26, 12), (Main, 2210, 26, 12), (Main, 2060, -26, 12), (Main, 2160, -26, 12),
+        (Highline, 760, 0, 10), (Highline, 1020, 0, 10), (Highline, 1280, 0, 10), (Highline, 1420, 0, 10),
+        (Wishbone, 160, 0, 10), (Wishbone, 330, 0, 10), (WishL, 270, 0, 10), (WishL, 440, 0, 10), (WishR, 320, 0, 10), (WishR, 470, 0, 10),
+    };
+
+    // Rails that curve and hump: run, distance, side offset, length, height at the ends, bend (m to the side and back),
+    // hump (m up over the middle), and waves (1 bends in a C, 2 in an S). They keep out of the center line, so a skier
+    // who does not want them rides past.
+    static readonly (Run r, float s, float x, float len, float height, float bend, float hump, int waves)[] Curves =
+    {
+        (Main, 530, 26, 24, 0.4f, 0, 1.5f, 1), (Main, 565, 26, 30, 0.5f, 5, 0, 1), (Main, 610, 26, 36, 0.5f, 3, 0, 2),
+        (Main, 1650, 26, 36, 0.5f, 3, 0, 2), (Main, 1700, 26, 24, 0.4f, 0, 1.5f, 1), (Main, 1850, 26, 24, 0.4f, 0, 1.5f, 1),
+        (Main, 1980, 26, 30, 0.5f, 5, 0, 1), (Main, 2520, -26, 24, 0.4f, 0, 1.5f, 1), (Main, 2580, -26, 36, 0.5f, 3, 0, 2),
+        (Main, 2525, 26, 30, 0.5f, 5, 0, 1), (Main, 2600, 26, 24, 0.4f, 0, 1.5f, 1),
+        (Highline, 530, -4, 30, 0.5f, -2.5f, 0, 1), (Highline, 860, 4, 36, 0.5f, 2, 0, 2), (Highline, 1510, -4, 24, 0.4f, 0, 1.5f, 1),
+        (Wishbone, 260, 4, 24, 0.4f, 0, 1.5f, 1), (WishL, 370, -4, 36, 0.5f, 2, 0, 2), (WishR, 260, 4, 30, 0.5f, 2.5f, 0, 1),
+        (WishR, 420, -4, 24, 0.4f, 0, 1.5f, 1), (Bumps, 505, -5, 20, 0.4f, 0, 1.2f, 1), (Bumps, 545, 5, 24, 0.5f, 3, 0, 1),
+        (Zipper, 340, -5, 24, 0.4f, 0, 1.5f, 1), (Zipper, 400, 5, 30, 0.5f, 3, 0, 1),
+    };
 
     // Mega park rail garden at the top of Main Street: distance past the park start, side offset, length, width, height, kink (see Grind).
     static readonly (float at, float x, float len, float width, float height, float kink)[] Rails =
@@ -174,8 +229,9 @@ public class Mountain : MonoBehaviour
     {
         // Gap kickers where Main Street, a ridge, or the Tube meets a canyon or a cat track. A road is a level bench, so on
         // a steep slope its downhill edge would be a lip. A kicker is three quarters as wide as the run (60 m on Main
-        // Street, so the outer edges still drop into a canyon), and at least 12 m. It stops at a canyon's rim, or at the
-        // start of a cat track's cut. On a ridge it stops where the crossing starts to cut the ridge.
+        // Street, so the outer edges still drop into a canyon), and at least 12 m. In the Tube's round gully it is as wide
+        // as the flat of the bottom. It stops at a canyon's rim, or at the start of a cat track's cut. On a ridge it stops
+        // where the crossing starts to cut the ridge.
         foreach (var r in new[] { Main, Highline, Wishbone, WishL, WishR, Tube })
             foreach (var g in Runs)
                 if (g.gap)
@@ -183,19 +239,19 @@ public class Mountain : MonoBehaviour
                     {
                         bool rim = g.Offset(sg) < -1f && r.Offset(s) <= 0f;
                         var k = Jump(14f, 28f, 0f, 0f, 0f, 0f);
-                        Put(r, s - ((rim ? g.half : g.half + g.falloff) / sin + 2f) - End(k).x, 0f, Mathf.Max(1.5f * r.half, 12f), k, obstacle);
+                        Put(r, s - ((rim ? g.half : g.half + g.falloff) / sin + 2f) - End(k).x, 0f, r.round ? r.half : Mathf.Max(1.5f * r.half, 12f), k, obstacle);
                     }
 
         // Upper Main Street: a chain of step down gaps. Each island lands the skier and kicks them on to the next.
-        // Sized for the 15° slope there (simulated): 23 to 34 m/s at the lip lands on each 34 m deck.
+        // Tested in game: 25 to 29 m/s into the chain lands about 6 m into each 34 m deck.
         float at = Put(Main, 800f, 0f, 16f, Jump(14f, 26f, 0f, 0f, 0f, 0f), obstacle);
-        at = Put(Main, at + 28f, 0f, 16f, Island(2f, 34f, 10f, 26f), obstacle);
-        at = Put(Main, at + 28f, 0f, 16f, Island(2f, 34f, 10f, 26f), obstacle);
-        Put(Main, at + 28f, 0f, 16f, GapLanding(2.5f, 34f, 20f, 5f, 8f), obstacle);
+        at = Put(Main, at + 22f, 0f, 16f, Island(2f, 34f, 10f, 26f), obstacle);
+        at = Put(Main, at + 22f, 0f, 16f, Island(2f, 34f, 10f, 26f), obstacle);
+        Put(Main, at + 22f, 0f, 16f, GapLanding(2.5f, 34f, 20f, 5f, 8f), obstacle);
 
         // A gap along the top of the Highline spine, sized like the chain.
         at = Put(Highline, 400f, 0f, 10f, Jump(14f, 26f, 0f, 0f, 0f, 0f), obstacle);
-        Put(Highline, at + 28f, 0f, 10f, GapLanding(2.5f, 34f, 20f, 5f, 8f), obstacle);
+        Put(Highline, at + 22f, 0f, 10f, GapLanding(2.5f, 34f, 20f, 5f, 8f), obstacle);
 
         // Mega park, at the top of Main Street, sized for the 21 to 26 m/s a skier carries there (simulated with the speed the
         // climb up a kicker costs). Left: a jump line, each table top bigger. Center: two gaps, then the money booter.
@@ -217,51 +273,153 @@ public class Mountain : MonoBehaviour
             Frame(Main, p + g.at, out Vector3 o, out Quaternion rot);
             Grind(transform, o, rot, 0f, g.x, g.len, g.width, g.height, g.kink, feature, steel);
         }
+        Curve(Main, p + 300f, 21f, 20f, 0.4f, 0f, 1.2f, 1);   // the end of the rail garden: a rainbow and a C
+        Curve(Main, p + 300f, 31f, 24f, 0.5f, -4f, 0f, 1);
+        Put(Main, p + 290f, -26f, 14f, Jump(12f, 28f, 4f, 12f, 4f, 6f), obstacle);   // and one more table top on the jump line
+
+        // Table tops where the skier is slower than about 33 m/s (simulated: the landing fits 3 of 4 speeds near the
+        // hands off speed there). Faster than that a table top would need to be 70 m long, so the steeps get side hits.
+        Put(Bumps, 245f, 0f, 14f, Jump(12f, 28f, 4f, 12f, 4f, 6f), obstacle);       // 15 to 21 m/s, between the mogul fields
+        Put(Highline, 250f, 0f, 10f, Jump(12f, 28f, 32f, 12f, 4f, 6f), obstacle);   // 26 to 30 m/s
+        Put(Main, 2560f, 0f, 16f, Jump(12f, 30f, 20f, 12f, 4f, 6f), obstacle);      // the runout: 24 to 27 m/s
+        Put(Main, 2640f, 0f, 16f, Jump(12f, 26f, 4f, 12f, 4f, 6f), obstacle);       // 15 to 21 m/s
+        foreach (var (r, s, x, w) in Hits) Put(r, s, x, w, Jump(10f, 18f, 2f, 28f, 2f, 4f), obstacle);
+        foreach (var c in Curves) Curve(c.r, c.s, c.x, c.len, c.height, c.bend, c.hump, c.waves);
 
         foreach (var (s, _, _) in Crossings(Tube, Highline)) Tunnel(Tube, s, obstacle);
     }
 
-    // A tunnel where a path runs under a ridge: a roof over the path for as long as the ridge stands 1.5 m above the
-    // arch. Its top is the ridge as it would be without the path, so a rider on the ridge rides straight over it. Inside,
-    // an ice arch 6 m high spans the path's flat. Each portal is a wall with the arch cut out.
+    // A rail that curves and humps on run r, from distance s, x to the side, len long. It bends bend m to the side and
+    // back (waves times), and rises hump m over its middle, height above the snow at its ends. It is a chain of 2 m steel
+    // segments that hand the skier on to each other (Rail.next and prev), with a post every 4 m.
+    void Curve(Run r, float s, float x, float len, float height, float bend, float hump, int waves)
+    {
+        int n = Mathf.CeilToInt(len / 2f);
+        Rail last = null;
+        Vector3 a = default;
+        for (int i = 0; i <= n; i++)
+        {
+            float t = i / (float)n;
+            Frame(r, s + len * t, out Vector3 o, out Quaternion rot);
+            Vector3 g = o + rot * Vector3.right * (x + bend * Mathf.Sin(Mathf.PI * waves * t));
+            g.y = Height(g.x, g.z);
+            Vector3 b = g + Vector3.up * (height + hump * Mathf.Sin(Mathf.PI * t));
+            if (i % 2 == 0) Part(transform, PrimitiveType.Cube, new Vector3(g.x, (g.y + b.y) / 2f - 0.19f, g.z), Quaternion.identity,
+                                 new Vector3(0.05f, b.y - g.y + 0.22f, 0.05f), steel, false);   // from 0.3 m under the snow to the rail
+            if (i > 0)
+            {
+                var along = Quaternion.LookRotation(b - a);
+                var rail = Bar(transform, "Rail", (a + b) / 2f - along * Vector3.up * 0.04f, along, new Vector3(0.08f, 0.08f, (b - a).magnitude), steel);
+                if (last) (last.next = rail).prev = last;
+                last = rail;
+            }
+            a = b;
+        }
+    }
+
+    // A tunnel where a round path runs under a ridge: a pipe 0.6 m thick, the circle the path's gully is cut from (radius
+    // half / sin 60°, see Height). The gully is the pipe's floor. The pipe's ice wall carries on from where the gully
+    // stops on the circle (41° from the bottom) up and over, and it is ground, so the skier can ride up it. The ridge
+    // covers the pipe as a roof for as long as it stands 1 m over it. Its top is the ridge as it would be without the
+    // path, so a rider on the ridge rides straight over. A snow face closes each end of the roof, and the pipe sticks out
+    // 2 m past it. The outside of the pipe, its rims, and the faces are walls.
     void Tunnel(Run path, float at, int obstacle)
     {
-        float Clear(float s) { Vector2 c = path.At(s); return Height(c.x, c.y, out _, path) - FallY(c.y) - Arch - 1.5f; }
+        const float T = 0.6f, Stick = 2f;
+        const int Around = 28;
+        float r = path.half / Sin60, ro = r + T, a0 = Mathf.Acos(0.75f);
+        Vector3 Axis(float s) { Vector2 c = path.At(s); return new Vector3(c.x, Height(c.x, c.y) + r, c.y); }
+        Vector3 Side(float s) { Vector2 d = (path.At(s + 1f) - path.At(s - 1f)).normalized; return new Vector3(d.y, 0f, -d.x); }
+        float Clear(float s) { Vector2 c = path.At(s); return Height(c.x, c.y, out _, path) - Axis(s).y - ro - 1f; }
         float s0 = at, s1 = at;
         while (Clear(s0 - 1f) > 0f) s0 -= 1f;
         while (Clear(s1 + 1f) > 0f) s1 += 1f;
-        int n = Mathf.CeilToInt((s1 - s0) / 2f), m = Mathf.RoundToInt(2f * (path.half + path.falloff));   // 2 m along, 1 m across
-        var top = new Vector3[n + 1, m + 1];
-        var arch = new Vector3[n + 1, m + 1];
+
+        // The pipe: rings every 1 m, each a vertical cut across the path like the gully. Angle 0 is the bottom, and the
+        // wall goes up the right side first.
+        var ice = new List<Vector3>();
+        var outside = new List<Vector3>();
+        int n = Mathf.CeilToInt(s1 - s0 + 2f * Stick);
+        var inner = new Vector3[n + 1, Around + 1];
+        var outer = new Vector3[n + 1, Around + 1];
         for (int i = 0; i <= n; i++)
         {
-            float s = Mathf.Lerp(s0, s1, i / (float)n);
-            Vector2 c = path.At(s), dir = (path.At(s + 1f) - path.At(s - 1f)).normalized, side = new(dir.y, -dir.x);
-            for (int j = 0; j <= m; j++)
+            float s = Mathf.Lerp(s0 - Stick, s1 + Stick, i / (float)n);
+            Vector3 c = Axis(s), side = Side(s);
+            for (int k = 0; k <= Around; k++)
             {
-                float d = j - m / 2f, u = d / path.half;
-                Vector2 q = c + side * d;
-                top[i, j] = new Vector3(q.x, Height(q.x, q.y, out _, path), q.y);
-                arch[i, j] = new Vector3(q.x, FallY(c.y) + (Mathf.Abs(u) < 1f ? Arch * Mathf.Sqrt(1f - u * u) : 0f), q.y);
+                float a = Mathf.Lerp(a0, 2f * Mathf.PI - a0, k / (float)Around);
+                Vector3 radial = side * Mathf.Sin(a) - Vector3.up * Mathf.Cos(a);
+                inner[i, k] = c + radial * r;
+                outer[i, k] = c + radial * ro;
+            }
+        }
+        for (int i = 0; i < n; i++)
+            for (int k = 0; k < Around; k++)
+            {
+                Quad(ice, inner[i, k], inner[i + 1, k], inner[i + 1, k + 1], inner[i, k + 1]);              // faces in
+                Quad(outside, outer[i, k + 1], outer[i + 1, k + 1], outer[i + 1, k], outer[i, k]);          // faces out
+            }
+        for (int k = 0; k < Around; k++)
+        {
+            Quad(outside, inner[0, k + 1], outer[0, k + 1], outer[0, k], inner[0, k]);                      // rims
+            Quad(outside, inner[n, k], outer[n, k], outer[n, k + 1], inner[n, k + 1]);
+        }
+
+        // The roof, 2 m along and 1 m across, as wide as the path's reach, where the path no longer cuts the snow. Its
+        // side edges dip 15 cm under the snow, so the snow mesh (on its own grid) leaves no crack along them.
+        int m = Mathf.CeilToInt((s1 - s0) / 2f), w = Mathf.RoundToInt(path.half + path.falloff);
+        var top = new Vector3[m + 1, 2 * w + 1];
+        for (int i = 0; i <= m; i++)
+        {
+            float s = Mathf.Lerp(s0, s1, i / (float)m);
+            Vector2 c = path.At(s);
+            Vector3 side = Side(s);
+            for (int j = 0; j <= 2 * w; j++)
+            {
+                Vector2 q = c + new Vector2(side.x, side.z) * (j - w);
+                top[i, j] = new Vector3(q.x, Height(q.x, q.y, out _, path) - (j == 0 || j == 2 * w ? 0.15f : 0f), q.y);
             }
         }
         var roof = new List<Vector3>();
-        var ice = new List<Vector3>();
-        var portals = new List<Vector3>();
-        for (int i = 0; i < n; i++)
-            for (int j = 0; j < m; j++)
-            {
-                Quad(roof, top[i, j], top[i + 1, j], top[i + 1, j + 1], top[i, j + 1]);
-                if (Mathf.Abs(j + 0.5f - m / 2f) < path.half) Quad(ice, arch[i, j], arch[i, j + 1], arch[i + 1, j + 1], arch[i + 1, j]);   // faces down
-            }
-        for (int j = 0; j < m; j++)
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < 2 * w; j++) Quad(roof, top[i, j], top[i + 1, j], top[i + 1, j + 1], top[i, j + 1]);
+
+        // The end faces: from the roof's edge down to 0.3 m into the snow, less the pipe. Columns every 0.5 m, and closer
+        // round the pipe.
+        var cols = new List<float>();
+        for (float x = -w; x <= w + 0.01f; x += 0.5f) if (Mathf.Abs(x) > ro) cols.Add(x);
+        for (int k = 0; k <= 30; k++) cols.Add(-ro * Mathf.Cos(k * Mathf.PI / 30f));
+        cols.Sort();
+        var faces = new List<Vector3>();
+        foreach (var (s, front) in new[] { (s0, true), (s1, false) })
         {
-            Quad(portals, top[0, j], top[0, j + 1], arch[0, j + 1], arch[0, j]);
-            Quad(portals, top[n, j + 1], top[n, j], arch[n, j], arch[n, j + 1]);
+            Vector2 c = path.At(s);
+            Vector3 side = Side(s), last = default, lastTop = default, lastHi = default, lastLo = default;
+            float axis = Axis(s).y;
+            int row = front ? 0 : m;
+            for (int j = 0; j < cols.Count; j++)
+            {
+                Vector2 q = c + new Vector2(side.x, side.z) * cols[j];
+                float fj = cols[j] + w;
+                int j0 = Mathf.Clamp((int)fj, 0, 2 * w - 1);
+                Vector3 t = Vector3.Lerp(top[row, j0], top[row, j0 + 1], fj - j0);   // on the roof's edge line
+                float snowY = Height(q.x, q.y) - 0.3f, half = Mathf.Sqrt(Mathf.Max(0f, ro * ro - cols[j] * cols[j]));
+                float hi = Mathf.Clamp(axis + half, snowY, t.y), lo = Mathf.Clamp(axis - half, snowY, hi);
+                Vector3 b = new(q.x, snowY, q.y), h = new(q.x, hi, q.y), l = new(q.x, lo, q.y);
+                if (j > 0)
+                {
+                    // The near face looks back up the path, so columns run left to right. The far face is the mirror.
+                    if (front) { Quad(faces, lastTop, t, h, lastHi); Quad(faces, lastLo, l, b, last); }
+                    else { Quad(faces, t, lastTop, lastHi, h); Quad(faces, l, lastLo, last, b); }
+                }
+                (last, lastTop, lastHi, lastLo) = (b, t, h, l);
+            }
         }
         Solid("Tunnel", roof, snow, 0);
-        Solid("Ice", ice, feature, 0);
-        Solid("Portal", portals, feature, obstacle);
+        Solid("Pipe", ice, feature, 0);
+        Solid("Pipe outside", outside, feature, obstacle);
+        Solid("Portal", faces, snow, obstacle);
     }
 
     // Trees on a jittered 9 m grid: dense forest in patches, thin glades between them. None on a run, a cat track,
@@ -326,14 +484,17 @@ public class Mountain : MonoBehaviour
         groomed = 0f;
         foreach (var r in Runs)
         {
-            if (r == skip || !r.Near(x, z, out float s, out float d, out Vector2 c)) continue;
+            if (r == skip || !r.Near(x, z, out float s, out float side, out Vector2 c)) continue;
             // A run is level across at the height of its center line. Within 60 m of its ends it eases to the fall line,
             // so a run that starts or ends in another run does not cut or fill it, and past its ends it fades out.
-            float level = Mathf.Clamp01(Mathf.Min(s, r.Length - s) / 60f), fade = 1f - Mathf.SmoothStep(0f, 1f, Mathf.Max(-s, s - r.Length) / r.falloff);
+            float d = Mathf.Abs(side), level = Mathf.Clamp01(Mathf.Min(s, r.Length - s) / 60f), fade = 1f - Mathf.SmoothStep(0f, 1f, Mathf.Max(-s, s - r.Length) / r.falloff);
             float w = (1f - Mathf.SmoothStep(0f, 1f, (d - r.half) / r.falloff)) * fade;
             float off = r.Offset(s) * fade, hr = Mathf.Lerp(h, FallY(Mathf.Lerp(z, c.y, level)), w);
             if (off > 0f) hr += off * (d < r.half ? 1f : 0.5f + 0.5f * Mathf.Cos(Mathf.PI * (d - r.half) / r.falloff));
-            else if (off < 0f) hr += off * Lip(1f - d * d / (r.half * r.half));
+            // A U, or for a round run the bottom of a circle of radius half / sin 60° (so depth is half the radius). Its
+            // fraction of the depth is 2 cos(angle from the bottom) - 1, and the rim is at 60°.
+            else if (off < 0f) hr += off * Lip(r.round ? 2f * Mathf.Sqrt(Mathf.Max(0f, 1f - 0.75f * d * d / (r.half * r.half))) - 1f : 1f - d * d / (r.half * r.half));
+            hr += r.Bump(s, side) * w;
             h = !r.branch ? hr : off > 0f ? Mathf.Max(h, hr) : Mathf.Min(h, hr);   // a branch keeps the ridge or gully it splits from
             groomed = Mathf.Max(groomed, w);
         }
@@ -348,6 +509,7 @@ public class Mountain : MonoBehaviour
     }
 
     // A canyon's U, max(t, 0), with the corner rounded, so the wall eases over into the snow about 3 m each side of the rim.
+    // It is t itself from 0.5 up, so a round run stays on its circle up to 41° from the bottom.
     static float Lip(float t) => t >= 0.5f ? t : t <= -0.5f ? 0f : (t + 0.5f) * (t + 0.5f) / 2f;
 
     // How far a straight line from height a to height b misses the snow height mid at its middle.
@@ -413,14 +575,20 @@ public class Mountain : MonoBehaviour
     }
 
     // A park feature built up from the plane through o (rot is its slope): profile pieces (length, start and end angle
-    // relative to the plane, positive is down), in a lane at x, w wide. Curves become 4° steps. The top is ground.
-    // Pieces steeper than 60° and the sides are walls on the Obstacle layer. The sides reach 4 m under the plane, so
-    // they stay in the snow where it curves. Returns the length along the plane.
+    // relative to the plane, positive is down), in a lane at x, w wide. Curves become 4° steps. Each point moves up or
+    // down with the fall line under the lane's center, so the feature sits on the run where the slope curves. Not with
+    // the snow itself, so a canyon rim or a bump under the end of a kicker does not bend it. The top is ground. Pieces
+    // steeper than 60° and the sides are walls on the Obstacle layer. It is a closed solid: the sides, the ends and the
+    // bottom reach 4 m into the snow. Returns the length along the plane.
     float Feature(Vector3 o, Quaternion rot, float x, float w, List<(float len, float a0, float a1)> profile, int obstacle)
     {
         var top = new List<Vector3>();
         var walls = new List<Vector3>();
-        Vector3 P(float s, float h, float side) => o + rot * new Vector3(x + side * w / 2f, h, s);
+        Vector3 P(float s, float h, float side)
+        {
+            Vector3 b = o + rot * new Vector3(x, 0f, s);
+            return o + rot * new Vector3(x + side * w / 2f, h, s) + Vector3.up * (FallY(b.z) - FallY(o.z) - (b.y - o.y));
+        }
         float s0 = 0f, h0 = 0f;
         foreach (var (len, a0, a1) in profile)
         {
@@ -437,8 +605,15 @@ public class Mountain : MonoBehaviour
             }
         }
         if (Mathf.Abs(h0) > 0.01f) Debug.LogWarning($"A park feature at {o} ends {h0:F2} m off its plane.");
+        // The ends and the bottom only close the solid for the eye. They have no collider: the skier sinks a few cm into
+        // the snow, and a start face would catch the sphere at full speed.
+        var shell = new List<Vector3>();
+        Quad(shell, P(0f, -4f, -1f), P(0f, 0f, -1f), P(0f, 0f, 1f), P(0f, -4f, 1f));        // the start, faces back up the run
+        Quad(shell, P(s0, -4f, 1f), P(s0, h0, 1f), P(s0, h0, -1f), P(s0, -4f, -1f));        // the end
+        Quad(shell, P(0f, -4f, -1f), P(0f, -4f, 1f), P(s0, -4f, 1f), P(s0, -4f, -1f));      // the bottom, faces down
         Solid("Feature", top, feature, 0);
         Solid("Wall", walls, feature, obstacle);
+        Solid("Shell", shell, feature, 0, false);
         return s0;
     }
 
@@ -499,14 +674,14 @@ public class Mountain : MonoBehaviour
         return e;
     }
 
-    void Solid(string name, List<Vector3> v, Material m, int layer)
+    void Solid(string name, List<Vector3> v, Material m, int layer, bool collide = true)
     {
-        var go = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer), typeof(MeshCollider)) { layer = layer };
+        var go = new GameObject(name, typeof(MeshFilter), typeof(MeshRenderer)) { layer = layer };
         go.transform.SetParent(transform, false);
         var mesh = Flat(v);
         go.GetComponent<MeshFilter>().sharedMesh = mesh;
         go.GetComponent<MeshRenderer>().sharedMaterial = m;
-        go.GetComponent<MeshCollider>().sharedMesh = mesh;
+        if (collide) go.AddComponent<MeshCollider>().sharedMesh = mesh;
     }
 
     class Run
@@ -514,6 +689,8 @@ public class Mountain : MonoBehaviour
         public readonly float half, falloff;
         public readonly bool gap;
         public bool branch;            // splits from another run: a ridge branch keeps the higher snow, a gully branch the lower
+        public bool round;             // a gully is the bottom of a circle, so a pipe fits it (see Tunnel)
+        public (float s0, float s1, float x0, float x1, float amp, float len, bool moguls)[] bumps = NoBumps;   // see Moguls, Rollers
         public readonly Vector2[] p;   // the smoothed path (x, z)
         public readonly float[] s;     // distance along it at each point
         readonly (float s, float off)[] offsets;
@@ -548,17 +725,18 @@ public class Mountain : MonoBehaviour
         }
 
         static readonly List<int> NoSegments = new();
+        static readonly (float, float, float, float, float, float, bool)[] NoBumps = new (float, float, float, float, float, float, bool)[0];
 
         static int Of(float z) => Mathf.Clamp(Mathf.FloorToInt((z + 100f) / Band), 0, 159);
 
         public float Length => s[^1];
 
         // The nearest point on the path to (x, z): distance along it (s, below 0 or past Length beyond the ends),
-        // distance from it (d), and the point (c).
+        // distance from it (side, positive to the right going down the run), and the point (c).
         // False if (x, z) is out of the run's reach.
-        public bool Near(float x, float z, out float along, out float d, out Vector2 c)
+        public bool Near(float x, float z, out float along, out float side, out Vector2 c)
         {
-            along = 0f;
+            along = side = 0f;
             c = default;
             float best = float.MaxValue;
             var q = new Vector2(x, z);
@@ -570,10 +748,32 @@ public class Mountain : MonoBehaviour
                 float t = Vector2.Dot(q - a, ab) / ab.sqrMagnitude, tc = Mathf.Clamp01(t);
                 Vector2 at = a + ab * tc;
                 float dd = (q - at).sqrMagnitude;
-                if (dd < best) { best = dd; along = s[i] + ((i == 0 && t < 0f) || (i == p.Length - 2 && t > 1f) ? t : tc) * ab.magnitude; c = at; }
+                if (dd < best)
+                {
+                    best = dd;
+                    along = s[i] + ((i == 0 && t < 0f) || (i == p.Length - 2 && t > 1f) ? t : tc) * ab.magnitude;
+                    c = at;
+                    side = (q.x - at.x) * ab.y - (q.y - at.y) * ab.x;
+                }
             }
-            d = Mathf.Sqrt(best);
+            float d = Mathf.Sqrt(best);
+            side = side < 0f ? -d : d;
             return d < half + falloff;
+        }
+
+        // The moguls and rollers at distance s along the run and x to its side. Each patch eases in over 5 m at its edges.
+        public float Bump(float s, float x)
+        {
+            float h = 0f;
+            foreach (var b in bumps)
+            {
+                float e = Mathf.Min(Mathf.Min(s - b.s0, b.s1 - s), Mathf.Min(x - b.x0, b.x1 - x));
+                if (e <= 0f) continue;
+                float wave = Mathf.Sin(2f * Mathf.PI * (s - b.s0) / b.len);
+                if (b.moguls) wave *= Mathf.Sin(2f * Mathf.PI * (x - b.x0) / b.len);
+                h += b.amp * wave * Mathf.SmoothStep(0f, 1f, e / 5f);
+            }
+            return h;
         }
 
         public float Offset(float along)

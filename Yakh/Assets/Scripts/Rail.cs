@@ -1,10 +1,10 @@
 using UnityEngine;
 
 // A straight rail along local z. Its length is the z scale and its top is half the y scale up.
-// ponytail: straight rails only, curved rails can move to the Splines package.
+// A kinked, curved, or humped rail is a chain of straight segments (next and prev).
 public class Rail : MonoBehaviour
 {
-    public Rail next;   // a kink: the segment that carries on from this end
+    public Rail next, prev;   // the segments that carry on from this end and from the start
     public Vector3 Dir => transform.forward;
     public bool Metal => transform.lossyScale.x <= 0.2f;   // a steel rail. A box is wider (the same split as Shapes.Grind).
 
@@ -15,5 +15,13 @@ public class Rail : MonoBehaviour
         Vector3 start = transform.position + transform.up * (transform.lossyScale.y / 2f) - span / 2f;
         t = Vector3.Dot(p - start, span) / span.sqrMagnitude;
         return start + span * Mathf.Clamp01(t);
+    }
+
+    // True if other is this rail or another segment of its chain.
+    public bool Joined(Rail other)
+    {
+        for (var r = this; r; r = r.next) if (r == other) return true;
+        for (var r = prev; r; r = r.prev) if (r == other) return true;
+        return false;
     }
 }

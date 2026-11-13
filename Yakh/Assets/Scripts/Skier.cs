@@ -80,6 +80,9 @@ public class Skier : MonoBehaviour
     public float armSwing = 0.6f;         // deg the arms swing per m/s² of turn or brake. A loose spring, so they lag and settle.
     public float airBend = 0.6f;          // knee bend in the air, ready for the landing
     public float shiftyAngle = 60f;       // right stick left or right in the air turns the hips and skis this far, not the chest
+    public float leanScale = 0.5f;        // the skier rolls at the ankles this part of the lean that balances a turn
+    public float maxAnkle = 25f;          // deg the skier rolls at the ankles into a turn, at most
+    public float edgeRatio = 1.2f;        // the skis roll on edge this many times the ankle roll
 
     [Header("Tricks: LB and RB are the left and right foot, LT and RT the left and right hand")]
     public float trickHold = 0.8f;        // s a trick is held before it counts
@@ -96,6 +99,8 @@ public class Skier : MonoBehaviour
     // What the camera follows: the rail line on a rail, so the snap correction never shakes it.
     public Vector3 Travel => bailed ? pelvis.linearVelocity : rail ? rail.Dir * (railSign * railSpeed) : rb.linearVelocity;
     public Vector3 Focus => bailed ? pelvis.transform.position : transform.position;
+    // How far the skier leans into a turn, -1 to 1 (positive to the left, 1 is maxAnkle). The camera tilts with it.
+    public float Lean => bailed ? 0f : ankle / maxAnkle;
 
     Rigidbody rb;
     Rigidbody[] parts;
@@ -118,8 +123,9 @@ public class Skier : MonoBehaviour
     readonly Pose[] skiRest = new Pose[2];
     readonly Vector2[] swing = new Vector2[4], swingV = new Vector2[4];   // per side: arm (pitch, roll), then ski wobble (pitch, yaw), deg
     Vector3 thighLeg, shinLeg, force, prevTravel;   // force: acceleration minus gravity in body axes, it swings the arms
-    float bend, sink, sinkV, look, lookSide = 1f;   // look: -1 to 1, the switch look over the left or right shoulder
-    bool lookingBack;
+    Vector3 carve;                        // what the skis do to the velocity on the snow (turn and braking), m/s² in body axes
+    float bend, sink, sinkV, twist, lookSide = 1f;   // twist: deg the upper body turns toward the travel line (see Animate)
+    float ankle;                          // deg everything above the ankles rolls into a turn, positive to the left
     float grindYaw, shifty;               // deg the chest and head turn toward the grind, and the hips and skis turn in a shifty
     Vector3 landNormal = Vector3.up;      // the slope normal where the jump arc meets the snow
     readonly Vector4[] legPose = new Vector4[2];   // per leg: extra bend, kick forward, swing out, ski tip up (deg)
@@ -286,6 +292,7 @@ public class Skier : MonoBehaviour
                 if (f.sqrMagnitude > 1e-4f) heading = f.normalized;
                 recovering = true;
                 spinVel = flipVel = spinInit = flipInit = 0f;
+                carve = Vector3.zero;
                 // The knees sink and the skis wobble, more for a harder hit (see Animate).
                 float impact = Mathf.Max(0f, -Vector3.Dot(v, groundUp));
                 sinkV += absorb * impact;
@@ -352,11 +359,14 @@ public class Skier : MonoBehaviour
                 }
             }
 
-            // Carve: the velocity bends toward the ski line, forward or switch.
-            Vector3 line = Vector3.Dot(v, heading) >= 0f ? heading : -heading;
+            // Carve: the velocity bends toward the ski line, forward or switch. What the skis do to it (the turn and the
+            // braking, not gravity or the snow faces) leans the skier (see Animate). Smoothed over about 0.1 s, because
+            // each snow face tilts the ski line a little.
+            Vector3 line = Vector3.Dot(v, heading) >= 0f ? heading : -heading, before = v;
             v = Vector3.RotateTowards(v, line * speed, grip * Mathf.Deg2Rad * dt, 0f);
             v = Vector3.MoveTowards(v, Vector3.zero, decel * dt);
             if (tuck) v += heading * (pushAccel * Mathf.Clamp01(1f - v.magnitude / pushMaxSpeed) * dt);
+            carve = Vector3.Lerp(carve, Quaternion.Inverse(rb.rotation) * (v - before) / dt, 1f - Mathf.Exp(-10f * dt));
             if (sprayAmount > 0f) Emit(spray, sprayAmount * Mathf.Clamp01(speed / 10f) * sprayRate, travel + groundUp * 0.7f);
             wasHockey = hockey;
         }
@@ -471,7 +481,7 @@ public class Skier : MonoBehaviour
         int count = Physics.OverlapSphereNonAlloc(feet, railReach + railAbove, near, railMask);
         for (int i = 0; i < count; i++)
         {
-            if (!near[i].TryGetComponent(out Rail r) || (r == lastRail && Time.time < railCooldown)) continue;
+            if (!near[i].TryGetComponent(out Rail r) || (lastRail && r.Joined(lastRail) && Time.time < railCooldown)) continue;
             Vector3 up = r.transform.up, along = r.Dir;
             Vector3 d = feet - r.Closest(feet, out float t);
             float above = Vector3.Dot(d, up);
@@ -499,10 +509,15 @@ public class Skier : MonoBehaviour
 
     void RideRail(Vector2 stick, float dt)
     {
-        // A kink: past the end of a segment the skier carries on along the next one with its speed.
-        // ponytail: forward only, a kinked rail ridden backward lets go at the joint. Add Rail.prev if that matters.
+        // A kink or a curve: past the end of a segment the skier carries on along the next one with its speed (the one
+        // before, riding backward). At a bend the skier can be just short of the new segment, so it starts inside it.
         Vector3 top = rail.Closest(rb.position, out float t);
-        if (t >= 1f && railSign > 0f && rail.next) top = (rail = rail.next).Closest(rb.position, out t);
+        Rail on = railSign > 0f ? rail.next : rail.prev;
+        if (on && (railSign > 0f ? t >= 1f : t <= 0f))
+        {
+            top = (rail = on).Closest(rb.position, out t);
+            t = Mathf.Clamp(t, 0.01f, 0.99f);
+        }
         Vector3 up = rail.transform.up, dir = rail.Dir * railSign, side = Vector3.Cross(up, dir);
         railSpeed += (Vector3.Dot(Vector3.down, dir) * gravity - railFriction) * dt;
 
@@ -533,7 +548,7 @@ public class Skier : MonoBehaviour
         rb.detectCollisions = true;
         lastRail = rail;
         rail = null;
-        railCooldown = Time.time + 0.4f;               // only this rail, so the next rail can lock at once
+        railCooldown = Time.time + 0.4f;               // only this rail (its chain), so the next rail can lock at once
         lastGroundedTime = popped ? -1f : Time.time;   // a late pop still works just after the rail end
         // A pop or a rising exit (a kicker) gets the landing check. A slip or a flat end never bails.
         airTime = popped || rb.linearVelocity.y > 1f ? 0f : -1f;
@@ -626,10 +641,10 @@ public class Skier : MonoBehaviour
 
     // Kinematic pose while skiing. The knees bend toward the crouch for a pop (right stick down) or a tuck (A),
     // and the hips drop so the ankles stay on the skis. A landing sinks the knees further and they spring back,
-    // the skis wobble, and the arms swing loose with the turns. In the air the knees bend a little for the landing,
-    // the arms float out for balance, and a trick moves the limbs it holds (see Tricks). Each part turns at its joint
-    // (its pivot) by a rotation in body axes, on top of its parent's turn, from its rest pose. A ski turns with its
-    // leg's swing but not with the knee bend, so on the snow the skis stay flat.
+    // the skis wobble, and the arms swing loose with the turns. In a turn the skier rolls at the ankles and the skis
+    // go on edge. In the air the knees bend a little for the landing, the arms float out for balance, and a trick
+    // moves the limbs it holds (see Tricks). Each part turns at its joint (its pivot) by a rotation in body axes, on
+    // top of its parent's turn, from its rest pose. A ski turns with its leg's swing but not with the knee bend.
     void Animate(Vector2 stick, bool tuck, float dt)
     {
         dt = Mathf.Min(dt, 1f / 30f);   // a long frame would blow up the stiff ski springs
@@ -643,16 +658,22 @@ public class Skier : MonoBehaviour
         float ease = 1f - Mathf.Exp(-(air ? trickRate : 2f * trickRate) * dt);   // faster on the snow, so the skis land flat
         int limbs = trick & ~Tail;
         bool tail = (trick & Tail) != 0, grab = IsGrab(trick);
-        // Riding switch, the skier looks back over one shoulder, the side of the last turn when the switch ride starts.
-        // A short air keeps the look. ponytail: no foot stagger. Add one if the switch stance looks too square.
-        if (grounded)
+        // Switch, like a stance swap in Skate 3: the upper body leads the travel line. While the skis swing round under it
+        // (a skid, a hockey stop, a pivot, a spin), the chest and head turn toward the way the skier moves, 3/4 of the
+        // angle, up to 60° and 75° more. Riding switch the skier looks back over the shoulder on the side the skis came
+        // round. The side holds past 150°, so it does not flip while the skis sit straight back. In the air the pose
+        // holds and the side follows the spin, so a 180 lands looking the way it turned. On a rail the grind turn leads.
+        // ponytail: no foot stagger. Add one if the switch stance looks too square.
+        Vector3 travel = Vector3.ProjectOnPlane(rb.linearVelocity, transform.up);
+        float twistT = rail ? 0f : twist;
+        if (!rail && travel.sqrMagnitude > 1f)
         {
-            bool back = Vector3.Dot(rb.linearVelocity, heading) < -1f;
-            if (back && !lookingBack) lookSide = lastSteer;
-            lookingBack = back;
+            float d = Vector3.SignedAngle(transform.forward, travel, transform.up);
+            if (Mathf.Abs(d) < 150f) lookSide = d < 0f ? -1f : 1f;
+            if (grounded) twistT = 0.75f * lookSide * Mathf.Abs(d);
         }
-        else if (rail) lookingBack = false;
-        look = Mathf.Lerp(look, lookingBack ? lookSide : 0f, 1f - Mathf.Exp(-6f * dt));
+        twist = Mathf.Lerp(twist, twistT, 1f - Mathf.Exp(-8f * dt));
+        float chestYaw = Mathf.Clamp(0.45f * twist, -60f, 60f), headYaw = Mathf.Clamp(twist - chestYaw, -75f, 75f);
         // On a rail the chest turns 60% of the way to the grind direction and the head the rest, so the skier faces down
         // the rail. In the air the right stick turns the hips and skis (a shifty) under a still chest.
         float toGrind = rail ? Vector3.SignedAngle(transform.forward, Vector3.ProjectOnPlane(Travel, transform.up), transform.up) : 0f;
@@ -669,6 +690,18 @@ public class Skier : MonoBehaviour
         // lifts its foot, not the body.
         Vector3 drop = thighLeg + shinLeg - Quaternion.Euler(-45f * b, 0f, 0f) * thighLeg - Quaternion.Euler(25f * b, 0f, 0f) * shinLeg;
         bool cross = limbs is LMute or RMute;
+
+        // Turning: the ankles roll into the turn, leanScale of the lean that balances what the skis do to the velocity
+        // (the turn and the braking, so a traverse leans into the hill and a hockey stop leans into the stop). Not the
+        // whole acceleration: the snow faces and the ground snap kick it every step, and that shook the skier. Everything
+        // above the ankles leans with them, on the point between the skis. The inside (uphill) knee bends a little and
+        // the outside leg straightens a little, so both skis stay on the snow (rise: how far each ankle moves). Both skis
+        // roll on edge edgeRatio times the ankle roll.
+        float ankleT = grounded ? Mathf.Clamp(leanScale * Mathf.Atan2(-carve.x, gravity) * Mathf.Rad2Deg, -maxAnkle, maxAnkle) : 0f;
+        ankle = Mathf.Lerp(ankle, ankleT, 1f - Mathf.Exp(-8f * dt));
+        int inside = ankle > 0f ? 0 : 1;
+        float rise = Mathf.Abs(skiRest[1].position.x - skiRest[0].position.x) / 2f * Mathf.Tan(Mathf.Abs(ankle) * Mathf.Deg2Rad);
+        float Lift(float x) => (Quaternion.Euler(-45f * x, 0f, 0f) * thighLeg + Quaternion.Euler(25f * x, 0f, 0f) * shinLeg).y;   // ankle height under the hip
         for (int s = 0; s < 2; s++)
         {
             float side = s == 0 ? -1f : 1f, low = side * roll;
@@ -680,6 +713,13 @@ public class Skier : MonoBehaviour
                   : new(1.6f - b, 45f, cross ? -8f : 15f, 0f);         // knee up, the tip up in front, beside the chest or across it
             Vector4 l = legPose[s] = Vector4.Lerp(legPose[s], t, ease);
             float bs = Mathf.Clamp(b + l.x, -0.2f, 2f);
+            if (rise > 0.001f)
+            {
+                // The bend that moves the ankle up by rise (inside) or down by rise (outside). The lift grows with the bend.
+                float lo = -0.2f, hi = 2f, at = Lift(bs) + (s == inside ? rise : -rise);
+                for (int k = 0; k < 12; k++) { float m = (lo + hi) / 2f; if (Lift(m) < at) lo = m; else hi = m; }
+                bs = (lo + hi) / 2f;
+            }
             Quaternion swingQ = hips * Quaternion.Euler(0f, 0f, side * l.z) * Quaternion.Euler(-l.y, 0f, 0f);
             thighTurn[s] = swingQ * Quaternion.Euler(-45f * bs, 0f, 0f);
             shinTurn[s] = swingQ * Quaternion.Euler(25f * bs, 0f, 0f);
@@ -688,13 +728,16 @@ public class Skier : MonoBehaviour
             Vector3 hipAt = rest[pv].position + drop + hips * (rest[thighs[s]].position - rest[pv].position);
             skiAt[s] = hipAt + thighTurn[s] * thighLeg + shinTurn[s] * shinLeg + skiTurn[s] * (skiRest[s].position - rest[thighs[s]].position - thighLeg - shinLeg);
         }
+        Vector3 pivot = (skiAt[0] + skiAt[1]) / 2f;
+        Quaternion tilt = Quaternion.AngleAxis(ankle, Vector3.forward), edge = Quaternion.AngleAxis(edgeRatio * ankle, Vector3.forward);
+        for (int s = 0; s < 2; s++) skiAt[s] = pivot + tilt * (skiAt[s] - pivot);
 
         // A tip grab crunches the chest forward and turns the grabbing shoulder forward. A tail grab leans back a little
         // and turns the grabbing shoulder back.
         float handSide = (limbs & RHand) != 0 ? 1f : -1f;
         Vector2 chestT = !grab ? Vector2.zero : tail ? new(-10f, 30f * handSide) : new(15f, -handSide * (cross ? 20f : 8f));
         chestPose = Vector2.Lerp(chestPose, chestT, ease);
-        Quaternion chestTurn = Quaternion.Euler(lean + chestPose.x, 35f * look + chestPose.y + 0.6f * grindYaw, 0f);
+        Quaternion chestTurn = tilt * Quaternion.Euler(lean + chestPose.x, chestYaw + chestPose.y + 0.6f * grindYaw, 0f);
 
         // Arms: on the snow they swing with the turns. In the air they float out a little for balance, and drift so they
         // never sit still. A lone trigger raises its arm. A grab reaches for the ski, and arms in cross the chest.
@@ -725,15 +768,15 @@ public class Skier : MonoBehaviour
             turn[i] = role[i] switch
             {
                 "Chest" => chestTurn,
-                "Head" => turn[p] * Quaternion.Euler(-0.6f * (lean + chestPose.x), 70f * look - chestPose.y + 0.4f * grindYaw, 0f),   // the eyes stay on the slope ahead, behind in switch, or down the rail
-                "Pelvis" => hips,
-                "Thigh" => thighTurn[s],
-                "Shin" => shinTurn[s],
+                "Head" => turn[p] * Quaternion.Euler(-0.6f * (lean + chestPose.x), headYaw - chestPose.y + 0.4f * grindYaw, 0f),   // the eyes stay on the slope ahead, behind in switch, or down the rail
+                "Pelvis" => tilt * hips,
+                "Thigh" => tilt * thighTurn[s],
+                "Shin" => tilt * shinTurn[s],
                 "UpperArm" => turn[p] * Quaternion.Euler(a.x, 0f, a.y),
                 "Forearm" => turn[p] * Quaternion.Euler(0.5f * a.x, 0f, 0f),    // a little whip. The elbow has no sideways swing.
                 _ => Quaternion.identity,
             };
-            Vector3 pos = p < 0 ? rest[i].position + drop : parts[p].transform.localPosition + turn[p] * (rest[i].position - rest[p].position);
+            Vector3 pos = p < 0 ? pivot + tilt * (rest[i].position + drop - pivot) : parts[p].transform.localPosition + turn[p] * (rest[i].position - rest[p].position);
             if (reachW[s] > 0.001f && role[i] == "UpperArm")
             {
                 Reach(s, pos, reachAt[s], out Quaternion upper, out foreReach[s]);
@@ -745,7 +788,7 @@ public class Skier : MonoBehaviour
         for (int s = 0; s < 2; s++)
         {
             Vector3 p = body.TransformPoint(skiAt[s]);
-            Quaternion r = body.rotation * skiTurn[s] * Quaternion.Euler(swing[2 + s].x, swing[2 + s].y, 0f) * skiRest[s].rotation;
+            Quaternion r = body.rotation * edge * skiTurn[s] * Quaternion.Euler(swing[2 + s].x, swing[2 + s].y, 0f) * skiRest[s].rotation;
             skis[s].SetPositionAndRotation(p, r);
             boots[s].SetPositionAndRotation(p, r);   // the boot has the ski's pivot, so it stays in the binding
         }
